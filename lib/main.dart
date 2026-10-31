@@ -1,8 +1,16 @@
 import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-void main() => runApp(const AirAlgerieApp());
+void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  runApp(const AirAlgerieApp());
+}
+
+// =====================================================
+// APPLICATION
+// =====================================================
 
 class AirAlgerieApp extends StatelessWidget {
   const AirAlgerieApp({super.key});
@@ -10,28 +18,42 @@ class AirAlgerieApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      debugShowCheckedModeBanner: false,
       title: 'Air Algérie Ground Handling',
+      debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.red, primary: Colors.red.shade800),
         useMaterial3: true,
-        scaffoldBackgroundColor: const Color(0xFFF5F5F5),
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF00843D),
+        ),
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Color(0xFF00843D),
+          foregroundColor: Colors.white,
+          centerTitle: true,
+        ),
+        floatingActionButtonTheme: const FloatingActionButtonThemeData(
+          backgroundColor: Color(0xFF00843D),
+          foregroundColor: Colors.white,
+        ),
       ),
       home: const FlightsHomePage(),
     );
   }
 }
 
-class Flight {
-  String id;
-  String number;
-  String route;
-  String category;
-  String arrival;
-  String departure;
-  String notes;
+// =====================================================
+// FLIGHT MODEL
+// =====================================================
 
-  Flight({
+class Flight {
+  final String id;
+  final String number;
+  final String route;
+  final String category;
+  final String arrival;
+  final String departure;
+  final String notes;
+
+  const Flight({
     required this.id,
     required this.number,
     required this.route,
@@ -41,21 +63,34 @@ class Flight {
     required this.notes,
   });
 
-  Map<String, dynamic> toJson() => {
-    'id': id, 'number': number, 'route': route, 'category': category,
-    'arrival': arrival, 'departure': departure, 'notes': notes,
-  };
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'number': number,
+      'route': route,
+      'category': category,
+      'arrival': arrival,
+      'departure': departure,
+      'notes': notes,
+    };
+  }
 
-  factory Flight.fromJson(Map<String, dynamic> json) => Flight(
-    id: json['id'] ?? DateTime.now().microsecondsSinceEpoch.toString(),
-    number: json['number'] ?? '',
-    route: json['route'] ?? '',
-    category: json['category'] ?? 'Intérieure',
-    arrival: json['arrival'] ?? '',
-    departure: json['departure'] ?? '',
-    notes: json['notes'] ?? '',
-  );
+  factory Flight.fromJson(Map<String, dynamic> json) {
+    return Flight(
+      id: json['id']?.toString() ?? '',
+      number: json['number']?.toString() ?? '',
+      route: json['route']?.toString() ?? '',
+      category: json['category']?.toString() ?? 'Arrivée',
+      arrival: json['arrival']?.toString() ?? '',
+      departure: json['departure']?.toString() ?? '',
+      notes: json['notes']?.toString() ?? '',
+    );
+  }
 }
+
+// =====================================================
+// HOME PAGE
+// =====================================================
 
 class FlightsHomePage extends StatefulWidget {
   const FlightsHomePage({super.key});
@@ -65,12 +100,21 @@ class FlightsHomePage extends StatefulWidget {
 }
 
 class _FlightsHomePageState extends State<FlightsHomePage> {
-  final List<Flight> _flights = [];
-  final TextEditingController _search = TextEditingController();
-  int _tab = 0;
-  bool _loading = true;
+  static const String _storageKey = 'air_algerie_flights';
 
-  static const _storageKey = 'air_algerie_flights_v1';
+  List<Flight> _flights = [];
+  bool _isLoading = true;
+
+  final TextEditingController _searchController = TextEditingController();
+
+  String _searchQuery = '';
+  String _selectedFilter = 'Tous';
+
+  final List<String> _filters = [
+    'Tous',
+    'Arrivée',
+    'Départ',
+  ];
 
   @override
   void initState() {
@@ -80,253 +124,641 @@ class _FlightsHomePageState extends State<FlightsHomePage> {
 
   @override
   void dispose() {
-    _search.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
+  // ===================================================
+  // LOAD FLIGHTS
+  // ===================================================
+
   Future<void> _loadFlights() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_storageKey);
-    if (raw != null) {
-      try {
-        final decoded = jsonDecode(raw) as List<dynamic>;
-        _flights
-          ..clear()
-          ..addAll(decoded.map((e) => Flight.fromJson(Map<String, dynamic>.from(e))));
-      } catch (_) {
-        // Ignore a damaged local record and let the user continue.
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final String? savedData = prefs.getString(_storageKey);
+
+      List<Flight> loadedFlights = [];
+
+      if (savedData != null && savedData.isNotEmpty) {
+        final decoded = jsonDecode(savedData);
+
+        if (decoded is List) {
+          loadedFlights = decoded
+              .whereType<Map>()
+              .map(
+                (item) => Flight.fromJson(
+                  Map<String, dynamic>.from(item),
+                ),
+              )
+              .toList();
+        }
       }
+
+      if (!mounted) return;
+
+      setState(() {
+        _flights = loadedFlights;
+        _isLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+
+      setState(() {
+        _flights = [];
+        _isLoading = false;
+      });
+
+      _showMessage('Erreur lors du chargement des vols.');
     }
-    if (mounted) setState(() => _loading = false);
   }
+
+  // ===================================================
+  // SAVE FLIGHTS
+  // ===================================================
 
   Future<void> _saveFlights() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_storageKey, jsonEncode(_flights.map((f) => f.toJson()).toList()));
-  }
+    try {
+      final prefs = await SharedPreferences.getInstance();
 
-  List<Flight> get _visibleFlights {
-    final q = _search.text.trim().toLowerCase();
-    return _flights.where((f) {
-      final matchesTab = _tab == 0 ||
-          (_tab == 1 && f.category == 'Intérieure') ||
-          (_tab == 2 && f.category == 'Internationale') ||
-          (_tab == 3 && f.category == 'Cargo');
-      final matchesSearch = q.isEmpty ||
-          f.number.toLowerCase().contains(q) ||
-          f.route.toLowerCase().contains(q) ||
-          f.notes.toLowerCase().contains(q);
-      return matchesTab && matchesSearch;
-    }).toList()
-      ..sort((a, b) => a.departure.compareTo(b.departure));
-  }
+      final String encodedData = jsonEncode(
+        _flights.map((flight) => flight.toJson()).toList(),
+      );
 
-  Future<void> _openFlightForm({Flight? existing}) async {
-    final result = await showDialog<Flight>(
-      context: context,
-      builder: (_) => FlightFormDialog(flight: existing),
-    );
-    if (result == null) return;
-    setState(() {
-      final index = _flights.indexWhere((f) => f.id == result.id);
-      if (index >= 0) {
-        _flights[index] = result;
-      } else {
-        _flights.add(result);
-      }
-    });
-    await _saveFlights();
-  }
-
-  Future<void> _deleteFlight(Flight flight) async {
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Supprimer le vol ?'),
-        content: Text('Voulez-vous supprimer ${flight.number} ?'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Annuler')),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Supprimer'),
-          ),
-        ],
-      ),
-    );
-    if (confirm == true) {
-      setState(() => _flights.removeWhere((f) => f.id == flight.id));
-      await _saveFlights();
+      await prefs.setString(_storageKey, encodedData);
+    } catch (e) {
+      _showMessage('Erreur lors de la sauvegarde des vols.');
     }
   }
+
+  // ===================================================
+  // SEARCH AND FILTER
+  // ===================================================
+
+  List<Flight> get _filteredFlights {
+    final query = _searchQuery.toLowerCase().trim();
+
+    return _flights.where((flight) {
+      final matchesSearch =
+          flight.number.toLowerCase().contains(query) ||
+          flight.route.toLowerCase().contains(query) ||
+          flight.category.toLowerCase().contains(query) ||
+          flight.arrival.toLowerCase().contains(query) ||
+          flight.departure.toLowerCase().contains(query) ||
+          flight.notes.toLowerCase().contains(query);
+
+      final matchesFilter = _selectedFilter == 'Tous' ||
+          flight.category == _selectedFilter;
+
+      return matchesSearch && matchesFilter;
+    }).toList()
+      ..sort((a, b) {
+        final aTime = a.arrival.isNotEmpty ? a.arrival : a.departure;
+        final bTime = b.arrival.isNotEmpty ? b.arrival : b.departure;
+
+        return aTime.compareTo(bTime);
+      });
+  }
+
+  // ===================================================
+  // ADD FLIGHT
+  // ===================================================
+
+  Future<void> _addFlight() async {
+    final Flight? flight = await showDialog<Flight>(
+      context: context,
+      builder: (context) => const FlightFormDialog(),
+    );
+
+    if (flight == null || !mounted) return;
+
+    setState(() {
+      _flights.add(flight);
+    });
+
+    await _saveFlights();
+
+    if (!mounted) return;
+
+    _showMessage('Vol ajouté avec succès.');
+  }
+
+  // ===================================================
+  // EDIT FLIGHT
+  // ===================================================
+
+  Future<void> _editFlight(Flight flight) async {
+    final Flight? updatedFlight = await showDialog<Flight>(
+      context: context,
+      builder: (context) => FlightFormDialog(
+        flight: flight,
+      ),
+    );
+
+    if (updatedFlight == null || !mounted) return;
+
+    setState(() {
+      final index = _flights.indexWhere(
+        (item) => item.id == flight.id,
+      );
+
+      if (index != -1) {
+        _flights[index] = updatedFlight;
+      }
+    });
+
+    await _saveFlights();
+
+    if (!mounted) return;
+
+    _showMessage('Vol modifié avec succès.');
+  }
+
+  // ===================================================
+  // DELETE FLIGHT
+  // ===================================================
+
+  Future<void> _deleteFlight(Flight flight) async {
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Supprimer le vol'),
+          content: Text(
+            'Voulez-vous vraiment supprimer le vol ${flight.number} ?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.pop(dialogContext, false);
+              },
+              child: const Text('Annuler'),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: Colors.red,
+              ),
+              onPressed: () {
+                Navigator.pop(dialogContext, true);
+              },
+              child: const Text('Supprimer'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    setState(() {
+      _flights.removeWhere(
+        (item) => item.id == flight.id,
+      );
+    });
+
+    await _saveFlights();
+
+    if (!mounted) return;
+
+    _showMessage('Vol supprimé.');
+  }
+
+  // ===================================================
+  // MESSAGE
+  // ===================================================
+
+  void _showMessage(String message) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+  }
+
+  // ===================================================
+  // FLIGHT COLOR
+  // ===================================================
+
+  Color _categoryColor(String category) {
+    if (category == 'Arrivée') {
+      return Colors.blue;
+    }
+
+    if (category == 'Départ') {
+      return Colors.deepOrange;
+    }
+
+    return Colors.green;
+  }
+
+  // ===================================================
+  // FLIGHT CARD
+  // ===================================================
+
+  Widget _buildFlightCard(Flight flight) {
+    final Color categoryColor = _categoryColor(flight.category);
+
+    return Card(
+      margin: const EdgeInsets.symmetric(
+        horizontal: 12,
+        vertical: 6,
+      ),
+      elevation: 2,
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: () => _editFlight(flight),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  CircleAvatar(
+                    backgroundColor: categoryColor.withValues(alpha: 0.12),
+                    child: Icon(
+                      flight.category == 'Arrivée'
+                          ? Icons.flight_land
+                          : Icons.flight_takeoff,
+                      color: categoryColor,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          flight.number,
+                          style: const TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          flight.route,
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: Colors.grey.shade700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 5,
+                    ),
+                    decoration: BoxDecoration(
+                      color: categoryColor.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      flight.category,
+                      style: TextStyle(
+                        color: categoryColor,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                  PopupMenuButton<String>(
+                    tooltip: 'Options',
+                    onSelected: (value) {
+                      if (value == 'edit') {
+                        _editFlight(flight);
+                      } else if (value == 'delete') {
+                        _deleteFlight(flight);
+                      }
+                    },
+                    itemBuilder: (context) => const [
+                      PopupMenuItem<String>(
+                        value: 'edit',
+                        child: Row(
+                          children: [
+                            Icon(Icons.edit_outlined),
+                            SizedBox(width: 8),
+                            Text('Modifier'),
+                          ],
+                        ),
+                      ),
+                      PopupMenuItem<String>(
+                        value: 'delete',
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.delete_outline,
+                              color: Colors.red,
+                            ),
+                            SizedBox(width: 8),
+                            Text('Supprimer'),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              const Divider(height: 24),
+              Row(
+                children: [
+                  Expanded(
+                    child: _buildTimeInfo(
+                      icon: Icons.flight_land,
+                      label: 'Arrivée',
+                      time: flight.arrival,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: _buildTimeInfo(
+                      icon: Icons.flight_takeoff,
+                      label: 'Départ',
+                      time: flight.departure,
+                    ),
+                  ),
+                ],
+              ),
+              if (flight.notes.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Icon(
+                        Icons.notes,
+                        size: 18,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(flight.notes),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTimeInfo({
+    required IconData icon,
+    required String label,
+    required String time,
+  }) {
+    return Row(
+      children: [
+        Icon(
+          icon,
+          size: 18,
+          color: Colors.grey.shade600,
+        ),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.grey.shade600,
+                ),
+              ),
+              const SizedBox(height: 3),
+              Text(
+                time.isEmpty ? '--:--' : time,
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 15,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ===================================================
+  // HOME PAGE BUILD
+  // ===================================================
 
   @override
   Widget build(BuildContext context) {
-    final titles = ['Tous les vols', 'Vols intérieurs', 'Vols internationaux', 'Cargo'];
+    final flights = _filteredFlights;
+
     return Scaffold(
       appBar: AppBar(
-        backgroundColor: Colors.red.shade800,
-        foregroundColor: Colors.white,
-        title: const Text('Air Algérie • Ground Handling', style: TextStyle(fontSize: 18)),
+        title: const Column(
+          children: [
+            Text(
+              'Air Algérie',
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                fontSize: 20,
+              ),
+            ),
+            Text(
+              'Ground Handling',
+              style: TextStyle(fontSize: 12),
+            ),
+          ],
+        ),
         actions: [
           IconButton(
-            tooltip: 'Ajouter un vol',
-            onPressed: () => _openFlightForm(),
-            icon: const Icon(Icons.add_circle_outline),
+            tooltip: 'Actualiser',
+            onPressed: _loadFlights,
+            icon: const Icon(Icons.refresh),
           ),
         ],
       ),
-      drawer: Drawer(
-        child: SafeArea(
+      body: Column(
+        children: [
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(16),
+            decoration: const BoxDecoration(
+              color: Color(0xFF00843D),
+              borderRadius: BorderRadius.only(
+                bottomLeft: Radius.circular(20),
+                bottomRight: Radius.circular(20),
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Gestion des vols',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  'Nombre total de vols : ${_flights.length}',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 14,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: _searchController,
+                  onChanged: (value) {
+                    setState(() {
+                      _searchQuery = value;
+                    });
+                  },
+                  decoration: InputDecoration(
+                    hintText: 'Rechercher un vol...',
+                    prefixIcon: const Icon(Icons.search),
+                    suffixIcon: _searchQuery.isNotEmpty
+                        ? IconButton(
+                            onPressed: () {
+                              _searchController.clear();
+
+                              setState(() {
+                                _searchQuery = '';
+                              });
+                            },
+                            icon: const Icon(Icons.clear),
+                          )
+                        : null,
+                    filled: true,
+                    fillColor: Colors.white,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide.none,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            height: 42,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              children: _filters.map((filter) {
+                return Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: ChoiceChip(
+                    label: Text(filter),
+                    selected: _selectedFilter == filter,
+                    onSelected: (_) {
+                      setState(() {
+                        _selectedFilter = filter;
+                      });
+                    },
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Expanded(
+            child: _isLoading
+                ? const Center(
+                    child: CircularProgressIndicator(),
+                  )
+                : flights.isEmpty
+                    ? _buildEmptyState()
+                    : RefreshIndicator(
+                        onRefresh: _loadFlights,
+                        child: ListView.builder(
+                          physics: const AlwaysScrollableScrollPhysics(),
+                          padding: const EdgeInsets.only(
+                            top: 4,
+                            bottom: 90,
+                          ),
+                          itemCount: flights.length,
+                          itemBuilder: (context, index) {
+                            return _buildFlightCard(flights[index]);
+                          },
+                        ),
+                      ),
+          ),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _addFlight,
+        icon: const Icon(Icons.add),
+        label: const Text('Ajouter un vol'),
+      ),
+    );
+  }
+
+  Widget _buildEmptyState() {
+    return Center(
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
           child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.fromLTRB(20, 28, 20, 24),
-                color: Colors.red.shade900,
-                child: const Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Icon(Icons.flight_takeoff, color: Colors.white, size: 42),
-                    SizedBox(height: 12),
-                    Text('Gestion Sol & Vols', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
-                    Text('Application personnelle', style: TextStyle(color: Colors.white70)),
-                  ],
+              Icon(
+                Icons.flight_outlined,
+                size: 80,
+                color: Colors.grey.shade400,
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'Aucun vol trouvé',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
                 ),
               ),
-              ListTile(
-                leading: const Icon(Icons.add),
-                title: const Text('Ajouter un vol'),
-                onTap: () { Navigator.pop(context); _openFlightForm(); },
-              ),
-              ListTile(
-                leading: const Icon(Icons.info_outline),
-                title: const Text('À propos'),
-                subtitle: const Text('Les vols sont enregistrés sur ce téléphone.'),
-                onTap: () => showAboutDialog(
-                  context: context,
-                  applicationName: 'Air Algérie Ground Handling',
-                  applicationVersion: '1.0.0',
-                  children: const [Text('Version initiale : saisie manuelle et stockage local.')],
+              const SizedBox(height: 8),
+              Text(
+                _searchQuery.isNotEmpty || _selectedFilter != 'Tous'
+                    ? 'Essayez de modifier votre recherche.'
+                    : 'Appuyez sur le bouton pour ajouter un vol.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.grey.shade600,
                 ),
               ),
             ],
           ),
         ),
       ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
-                  child: TextField(
-                    controller: _search,
-                    onChanged: (_) => setState(() {}),
-                    decoration: InputDecoration(
-                      hintText: 'Rechercher un vol, une destination...',
-                      prefixIcon: const Icon(Icons.search),
-                      suffixIcon: _search.text.isEmpty
-                          ? null
-                          : IconButton(onPressed: () { _search.clear(); setState(() {}); }, icon: const Icon(Icons.close)),
-                      filled: true,
-                      fillColor: Colors.white,
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none),
-                    ),
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  child: Row(
-                    children: [
-                      Expanded(child: Text(titles[_tab], style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
-                      Text('${_visibleFlights.length} vol(s)', style: TextStyle(color: Colors.grey.shade700)),
-                    ],
-                  ),
-                ),
-                Expanded(
-                  child: _visibleFlights.isEmpty
-                      ? Center(
-                          child: Padding(
-                            padding: const EdgeInsets.all(28),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(Icons.flight, size: 64, color: Colors.grey.shade400),
-                                const SizedBox(height: 12),
-                                const Text('Aucun vol enregistré', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
-                                const SizedBox(height: 6),
-                                const Text('Appuyez sur + pour ajouter votre premier vol.', textAlign: TextAlign.center),
-                                const SizedBox(height: 16),
-                                FilledButton.icon(onPressed: () => _openFlightForm(), icon: const Icon(Icons.add), label: const Text('Ajouter un vol')),
-                              ],
-                            ),
-                          ),
-                        )
-                      : ListView.builder(
-                          padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                          itemCount: _visibleFlights.length,
-                          itemBuilder: (context, index) {
-                            final flight = _visibleFlights[index];
-                            return Card(
-                              color: Colors.white,
-                              elevation: 1,
-                              margin: const EdgeInsets.symmetric(vertical: 5),
-                              child: ListTile(
-                                contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                                leading: CircleAvatar(
-                                  backgroundColor: Colors.red.shade50,
-                                  child: Icon(flight.category == 'Cargo' ? Icons.inventory_2 : Icons.flight, color: Colors.red.shade800),
-                                ),
-                                title: Text('${flight.number} • ${flight.route}', style: const TextStyle(fontWeight: FontWeight.bold)),
-                                subtitle: Padding(
-                                  padding: const EdgeInsets.only(top: 6),
-                                  child: Text(
-                                    '${flight.category}\nArrivée : ${flight.arrival.isEmpty ? '—' : flight.arrival}   |   Départ : ${flight.departure.isEmpty ? '—' : flight.departure}'
-                                    '${flight.notes.isEmpty ? '' : '\nNote : ${flight.notes}'}',
-                                  ),
-                                ),
-                                isThreeLine: true,
-                                trailing: PopupMenuButton<String>(
-                                  onSelected: (value) {
-                                    if (value == 'edit') _openFlightForm(existing: flight);
-                                    if (value == 'delete') _deleteFlight(flight);
-                                  },
-                                  itemBuilder: (_) => const [
-                                    PopupMenuItem(value: 'edit', child: Text('Modifier')),
-                                    PopupMenuItem(value: 'delete', child: Text('Supprimer')),
-                                  ],
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-                ),
-              ],
-            ),
-      floatingActionButton: FloatingActionButton(
-        backgroundColor: Colors.red.shade800,
-        foregroundColor: Colors.white,
-        onPressed: () => _openFlightForm(),
-        child: const Icon(Icons.add),
-      ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _tab,
-        onDestinationSelected: (index) => setState(() => _tab = index),
-        destinations: const [
-          NavigationDestination(icon: Icon(Icons.list_alt), label: 'Tous'),
-          NavigationDestination(icon: Icon(Icons.flight_land), label: 'Intérieur'),
-          NavigationDestination(icon: Icon(Icons.public), label: 'International'),
-          NavigationDestination(icon: Icon(Icons.inventory_2), label: 'Cargo'),
-        ],
-      ),
     );
   }
 }
 
+// =====================================================
+// FLIGHT FORM DIALOG
+// =====================================================
+
 class FlightFormDialog extends StatefulWidget {
   final Flight? flight;
-  const FlightFormDialog({super.key, this.flight});
+
+  const FlightFormDialog({
+    super.key,
+    this.flight,
+  });
 
   @override
   State<FlightFormDialog> createState() => _FlightFormDialogState();
@@ -334,87 +766,244 @@ class FlightFormDialog extends StatefulWidget {
 
 class _FlightFormDialogState extends State<FlightFormDialog> {
   final _formKey = GlobalKey<FormState>();
+
   late final TextEditingController _number;
   late final TextEditingController _route;
   late final TextEditingController _arrival;
   late final TextEditingController _departure;
   late final TextEditingController _notes;
-  late String _category;
+
+  String _category = 'Arrivée';
 
   @override
   void initState() {
     super.initState();
-    final f = widget.flight;
-    _number = TextEditingController(text: f?.number ?? '');
-    _route = TextEditingController(text: f?.route ?? '');
-    _arrival = TextEditingController(text: f?.arrival ?? '');
-    _departure = TextEditingController(text: f?.departure ?? '');
-    _notes = TextEditingController(text: f?.notes ?? '');
-    _category = f?.category ?? 'Intérieure';
+
+    final flight = widget.flight;
+
+    _number = TextEditingController(
+      text: flight?.number ?? '',
+    );
+
+    _route = TextEditingController(
+      text: flight?.route ?? '',
+    );
+
+    _arrival = TextEditingController(
+      text: flight?.arrival ?? '',
+    );
+
+    _departure = TextEditingController(
+      text: flight?.departure ?? '',
+    );
+
+    _notes = TextEditingController(
+      text: flight?.notes ?? '',
+    );
+
+    _category = flight?.category ?? 'Arrivée';
   }
 
   @override
   void dispose() {
-    _number.dispose(); _route.dispose(); _arrival.dispose(); _departure.dispose(); _notes.dispose();
+    _number.dispose();
+    _route.dispose();
+    _arrival.dispose();
+    _departure.dispose();
+    _notes.dispose();
+
     super.dispose();
   }
 
-  InputDecoration _decoration(String label, String hint) => InputDecoration(
-    labelText: label,
-    hintText: hint,
-    border: const OutlineInputBorder(),
-  );
+  // ===================================================
+  // TIME PICKER
+  // ===================================================
+
+  Future<void> _selectTime(
+    TextEditingController controller,
+  ) async {
+    final TimeOfDay initialTime = _parseTime(controller.text);
+
+    final TimeOfDay? picked = await showTimePicker(
+      context: context,
+      initialTime: initialTime,
+      builder: (context, child) {
+        return MediaQuery(
+          data: MediaQuery.of(context).copyWith(
+            alwaysUse24HourFormat: true,
+          ),
+          child: child!,
+        );
+      },
+    );
+
+    if (picked != null) {
+      setState(() {
+        controller.text =
+            '${picked.hour.toString().padLeft(2, '0')}:'
+            '${picked.minute.toString().padLeft(2, '0')}';
+      });
+    }
+  }
+
+  TimeOfDay _parseTime(String value) {
+    try {
+      final parts = value.split(':');
+
+      if (parts.length == 2) {
+        final hour = int.parse(parts[0]);
+        final minute = int.parse(parts[1]);
+
+        if (hour >= 0 &&
+            hour <= 23 &&
+            minute >= 0 &&
+            minute <= 59) {
+          return TimeOfDay(
+            hour: hour,
+            minute: minute,
+          );
+        }
+      }
+    } catch (_) {
+      // Utiliser l'heure par défaut si la valeur est invalide.
+    }
+
+    return TimeOfDay.now();
+  }
+
+  // ===================================================
+  // TEXT FIELD
+  // ===================================================
+
+  Widget _buildTextField({
+    required TextEditingController controller,
+    required String label,
+    required IconData icon,
+    String? hint,
+    int maxLines = 1,
+    bool requiredField = false,
+    TextInputType keyboardType = TextInputType.text,
+    VoidCallback? onTap,
+    bool readOnly = false,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: TextFormField(
+        controller: controller,
+        maxLines: maxLines,
+        keyboardType: keyboardType,
+        readOnly: readOnly,
+        onTap: onTap,
+        decoration: InputDecoration(
+          labelText: label,
+          hintText: hint,
+          prefixIcon: Icon(icon),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+        ),
+        validator: requiredField
+            ? (value) {
+                if (value == null || value.trim().isEmpty) {
+                  return 'Ce champ est obligatoire';
+                }
+
+                return null;
+              }
+            : null,
+      ),
+    );
+  }
+
+  // ===================================================
+  // FORM BUILD
+  // ===================================================
 
   @override
   Widget build(BuildContext context) {
+    final bool isEditing = widget.flight != null;
+
     return AlertDialog(
-      title: Text(widget.flight == null ? 'Ajouter un vol' : 'Modifier le vol'),
+      title: Text(
+        isEditing ? 'Modifier le vol' : 'Ajouter un vol',
+      ),
       content: SizedBox(
-        width: 420,
+        width: 450,
         child: SingleChildScrollView(
           child: Form(
             key: _formKey,
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                TextFormField(
+                _buildTextField(
                   controller: _number,
-                  textCapitalization: TextCapitalization.characters,
-                  decoration: _decoration('Numéro du vol *', 'Ex. AH1003'),
-                  validator: (v) => (v == null || v.trim().isEmpty) ? 'Saisissez le numéro du vol' : null,
+                  label: 'Numéro du vol',
+                  hint: 'Exemple : AH1010',
+                  icon: Icons.confirmation_number_outlined,
+                  requiredField: true,
                 ),
-                const SizedBox(height: 12),
-                TextFormField(
+                _buildTextField(
                   controller: _route,
-                  decoration: _decoration('Trajet / destination *', 'Ex. Alger - Oran'),
-                  validator: (v) => (v == null || v.trim().isEmpty) ? 'Saisissez la destination' : null,
+                  label: 'Trajet',
+                  hint: 'Exemple : ALG - CDG',
+                  icon: Icons.route,
+                  requiredField: true,
                 ),
-                const SizedBox(height: 12),
-                DropdownButtonFormField<String>(
-                  value: _category,
-                  decoration: _decoration('Catégorie', ''),
-                  items: const [
-                    DropdownMenuItem(value: 'Intérieure', child: Text('Intérieure')),
-                    DropdownMenuItem(value: 'Internationale', child: Text('Internationale')),
-                    DropdownMenuItem(value: 'Cargo', child: Text('Cargo')),
-                  ],
-                  onChanged: (v) => setState(() => _category = v ?? 'Intérieure'),
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 14),
+                  child: DropdownButtonFormField<String>(
+                    value: _category,
+                    decoration: InputDecoration(
+                      labelText: 'Catégorie du vol',
+                      prefixIcon: const Icon(Icons.flight),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    items: const [
+                      DropdownMenuItem(
+                        value: 'Arrivée',
+                        child: Text('Arrivée'),
+                      ),
+                      DropdownMenuItem(
+                        value: 'Départ',
+                        child: Text('Départ'),
+                      ),
+                    ],
+                    onChanged: (value) {
+                      if (value != null) {
+                        setState(() {
+                          _category = value;
+                        });
+                      }
+                    },
+                  ),
                 ),
-                const SizedBox(height: 12),
-                TextFormField(
+                _buildTextField(
                   controller: _arrival,
-                  decoration: _decoration('Heure d’arrivée', 'Ex. 16:00'),
+                  label: 'Heure d’arrivée',
+                  hint: 'HH:MM',
+                  icon: Icons.flight_land,
+                  readOnly: true,
+                  onTap: () => _selectTime(_arrival),
                 ),
-                const SizedBox(height: 12),
-                TextFormField(
+                _buildTextField(
                   controller: _departure,
-                  decoration: _decoration('Heure de départ', 'Ex. 18:30'),
+                  label: 'Heure de départ',
+                  hint: 'HH:MM',
+                  icon: Icons.flight_takeoff,
+                  readOnly: true,
+                  onTap: () => _selectTime(_departure),
                 ),
-                const SizedBox(height: 12),
-                TextFormField(
+                _buildTextField(
                   controller: _notes,
-                  maxLines: 2,
-                  decoration: _decoration('Notes (facultatif)', 'Porte, remarques...'),
+                  label: 'Notes',
+                  hint: 'Informations supplémentaires...',
+                  icon: Icons.notes,
+                  maxLines: 3,
                 ),
               ],
             ),
@@ -422,22 +1011,34 @@ class _FlightFormDialogState extends State<FlightFormDialog> {
         ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Annuler')),
+        TextButton(
+          onPressed: () {
+            Navigator.pop(context);
+          },
+          child: const Text('Annuler'),
+        ),
         FilledButton(
           onPressed: () {
-            if (!_formKey.currentState!.validate()) return;
-            Navigator.pop(context, Flight(
-              id: widget.flight?.id ?? DateTime.now().microsecondsSinceEpoch.toString(),
+            if (!_formKey.currentState!.validate()) {
+              return;
+            }
+
+            final flight = Flight(
+              id: widget.flight?.id ??
+                  DateTime.now().microsecondsSinceEpoch.toString(),
               number: _number.text.trim().toUpperCase(),
               route: _route.text.trim(),
               category: _category,
               arrival: _arrival.text.trim(),
               departure: _departure.text.trim(),
               notes: _notes.text.trim(),
-            ));
+            );
+
+            Navigator.pop(context, flight);
           },
           child: const Text('Enregistrer'),
         ),
       ],
     );
   }
+}
